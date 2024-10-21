@@ -1,5 +1,5 @@
 obj-m += imu.o 
-imu-objs := mag.o
+imu-objs := stereo_imu.o stereo_imu_mag.o
 
 PWD := $(CURDIR) 
 
