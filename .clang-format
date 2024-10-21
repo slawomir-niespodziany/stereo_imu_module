@@ -1,0 +1,19 @@
+---
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 140
+# does (int) x instead of (int)x
+SpaceAfterCStyleCast: true
+UseTab: Never
+# if (x) doStuff()  is not allowed, bad style
+AllowShortIfStatementsOnASingleLine: false
+AlignTrailingComments: true
+SpacesBeforeTrailingComments: 3
+#  #define SHORT_NAME       42
+#  #define LONGER_NAME      0x007f   # does nice spacing for macros
+# AlignConsecutiveMacros: Consecutive
+# use \n instead of \r\n
+# UseCRLF: false
+# IndentAccessModifiers: false
+AccessModifierOffset: -4
+IncludeBlocks: Merge
