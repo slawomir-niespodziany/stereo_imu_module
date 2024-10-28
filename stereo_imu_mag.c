@@ -156,7 +156,7 @@ static int gpiochip_match(struct gpio_chip *chip, void *data) {
 
 static irqreturn_t irq_handler_top(int irq, void *dev_id) {
     mg_irqInProgress = 1u;
-    mg_irqTimestamp = HZ * jiffies;
+    mg_irqTimestamp = (1000ul * jiffies) / HZ;
     return IRQ_WAKE_THREAD;
 }
 
@@ -169,18 +169,21 @@ static irqreturn_t irq_handler_bottom(int irq, void *dev_id) {
     uint8_t status;
 
     result = spi_rd_data_m(&(entry.data_mag.x), &(entry.data_mag.y), &(entry.data_mag.z));
-    pr_info("spi_rd_data_m(&x, &y, &z)=%d, x=%5d, y=%5d, z=%5d.\n", result, entry.data_mag.x, entry.data_mag.y, entry.data_mag.z);
+    // pr_info("spi_rd_data_m(&x, &y, &z)=%d, x=%5d, y=%5d, z=%5d.\n", result, entry.data_mag.x, entry.data_mag.y, entry.data_mag.z);
 
     result = spi_rd_status(&status);
-    pr_info("spi_rd_status(&status)=%d, status=0x%x, MD=%d.\n", result, status, (0 != (0x01u & status)));
+    // pr_info("spi_rd_status(&status)=%d, status=0x%x, MD=%d.\n", result, status, (0 != (0x01u & status)));
 
     result = spi_wr_status(0u, 1u);
-    pr_info("spi_wr_status(0u, 1u)=%d.\n", result);
+    // pr_info("spi_wr_status(0u, 1u)=%d.\n", result);
 
     stereo_imu_mem_lock();
     if (0 < stereo_imu_mem_empty()) {
         memcpy(stereo_imu_mem_writeAt(0u), &entry, sizeof(entry_t));
         stereo_imu_mem_write(1u);
+
+    } else {
+        pr_err("Magnetometer measurement could not be stored.");
     }
     stereo_imu_mem_unlock();
 
@@ -262,6 +265,8 @@ static int mag_set_reset(void) {
     entry_t entry;
 
     spi_wr_ic0(0u, 1u, 0u, 0u, 0u);   // perform set
+    msleep(10u);
+
     spi_wr_ic0(0u, 0u, 0u, 0u, 1u);   // measure
 
     for (n = 0; n < N; n++) {
@@ -280,7 +285,7 @@ static int mag_set_reset(void) {
     }
 
     entry.type = ENTRY_TYPE_CALIB_MAG_SET;
-    entry.timestamp = HZ * jiffies;
+    entry.timestamp = (1000 * jiffies) / HZ;
 
     spi_rd_data_m(&(entry.data_mag.x), &(entry.data_mag.y), &(entry.data_mag.z));   // read data
     spi_rd_status(&status);
@@ -296,8 +301,9 @@ static int mag_set_reset(void) {
     }
     stereo_imu_mem_unlock();
 
-
     spi_wr_ic0(1u, 0u, 0u, 0u, 0u);   // perform reset
+    msleep(10u);
+
     spi_wr_ic0(0u, 0u, 0u, 0u, 1u);   // measure
 
     for (n = 0; n < N; n++) {
@@ -316,7 +322,7 @@ static int mag_set_reset(void) {
     }
 
     entry.type = ENTRY_TYPE_CALIB_MAG_RESET;
-    entry.timestamp = HZ * jiffies;
+    entry.timestamp = (1000 * jiffies) / HZ;
 
     spi_rd_data_m(&(entry.data_mag.x), &(entry.data_mag.y), &(entry.data_mag.z));   // read data
     spi_rd_status(&status);
@@ -328,7 +334,7 @@ static int mag_set_reset(void) {
         stereo_imu_mem_write(1u);
 
     } else {
-        pr_err("Magnetometer set measurement could not be stored.");
+        pr_err("Magnetometer reset measurement could not be stored.");
     }
     stereo_imu_mem_unlock();
 
@@ -364,7 +370,7 @@ int stereo_imu_mag_enable(void) {
         return -1;
     }
 
-    stereo_imu_mem_read(stereo_imu_mem_full()); // clear the buffer
+    stereo_imu_mem_read(stereo_imu_mem_full());   // clear the buffer
 
     enable_irq(mg_irqLine);
 
@@ -373,15 +379,15 @@ int stereo_imu_mag_enable(void) {
     }
 
     spi_wr_ic0(0u, 0u, 1u, 0u, 0u);   // irq on
-    spi_wr_ic2(2u);                                   // measure continously
+    spi_wr_ic2(5u);                   // measure continously
 
     return 0;
 }
 
 void stereo_imu_mag_disable(void) {
     disable_irq(mg_irqLine);   // does it wait for the threaded irq part to finish too? assuming so - if not, then after clearing the entry
-                                // buffer we may get a sample there sometimes (not a big deal but need to fix that in such case - below is a
-                                // fix/method to check how in fact does it work)
+                               // buffer we may get a sample there sometimes (not a big deal but need to fix that in such case - below is a
+                               // fix/method to check how in fact does it work)
     while (0u != mg_irqInProgress) {
         pr_err(
             "Bottom handler indeed still does some job 'after' disable_irq() returned. Keep the functionality of mg_irqInProgress or "
