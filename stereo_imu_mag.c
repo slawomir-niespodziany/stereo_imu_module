@@ -229,14 +229,14 @@ static int irq_init(void) {
     }
     irqLine = result;
 
-    disable_irq(irqLine);
-
     if (request_threaded_irq(irqLine, &irq_handler_top, &irq_handler_bottom, IRQ_TYPE_EDGE_RISING, "stereo_imu", NULL)) {
         pGpioChip->free(pGpioChip, mg_irqPin);   // revert pGpioChip->request() call
 
         pr_err("request_threaded_irq(%d)=%d\n", irqLine, result);
         return -1;
     }
+
+    disable_irq(irqLine);
 
     mg_pGpioChip = pGpioChip;
     mg_irqLine = irqLine;
@@ -275,7 +275,7 @@ static int mag_set_reset(void) {
         msleep(1u);
     }
     if (n == N) {
-        pr_err("Magnetometer measurement not done (while set).");
+        pr_err("Magnetometer measurement not done for set.");
         return -1;
     }
 
@@ -283,6 +283,8 @@ static int mag_set_reset(void) {
     entry.timestamp = HZ * jiffies;
 
     spi_rd_data_m(&(entry.data_mag.x), &(entry.data_mag.y), &(entry.data_mag.z));   // read data
+    spi_rd_status(&status);
+    spi_wr_status(0u, 1u);
 
     stereo_imu_mem_lock();
     if (0 < stereo_imu_mem_empty()) {
@@ -294,15 +296,13 @@ static int mag_set_reset(void) {
     }
     stereo_imu_mem_unlock();
 
-    pr_info("?? spi_rd_status(&status)=%d, status=0x%x, MD=%d.\n", spi_rd_status(&status), status, (0 != (0x01u & status)));
-    pr_info("?? spi_wr_status(0u, 1u)=%d.\n", spi_wr_status(0u, 1u));   // TODO REQUIRED?
 
-    pr_info("spi_wr_ic0(1u, 0u, 0u, 0u, 0u)=%d.\n", spi_wr_ic0(1u, 0u, 0u, 0u, 0u));   // perform reset
-    pr_info("spi_wr_ic0(0u, 0u, 0u, 0u, 1u)=%d.\n", spi_wr_ic0(0u, 0u, 0u, 0u, 1u));   // measure
+    spi_wr_ic0(1u, 0u, 0u, 0u, 0u);   // perform reset
+    spi_wr_ic0(0u, 0u, 0u, 0u, 1u);   // measure
 
     for (n = 0; n < N; n++) {
         uint8_t status;
-        pr_info("spi_rd_status(&status)=%d, status=0x%x, MD=%d\n", spi_rd_status(&status), status, (0 != (0x01u & status)));
+        spi_rd_status(&status);
 
         if (0 != (0x01u & status)) {
             break;
@@ -311,17 +311,26 @@ static int mag_set_reset(void) {
         msleep(1u);
     }
     if (n == N) {
-        pr_err("Magnetometer measurement not done (while reset).");
+        pr_err("Magnetometer measurement not done for reset.");
         return -1;
     }
 
-    pr_info("spi_rd_data_m(&x, &y, &z)=%d, x=%5d, y=%5d, z=%5d.\n", spi_rd_data_m(&x, &y, &z), x, y, z);
-    mg_offset_x = (mg_offset_x + ((int32_t) x)) / 2;
-    mg_offset_y = (mg_offset_y + ((int32_t) y)) / 2;
-    mg_offset_z = (mg_offset_z + ((int32_t) z)) / 2;
+    entry.type = ENTRY_TYPE_CALIB_MAG_RESET;
+    entry.timestamp = HZ * jiffies;
 
-    pr_info("?? spi_rd_status(&status)=%d, status=0x%x, MD=%d.\n", spi_rd_status(&status), status, (0 != (0x01u & status)));
-    pr_info("?? spi_wr_status(0u, 1u)=%d.\n", spi_wr_status(0u, 1u));   // TODO REQUIRED?
+    spi_rd_data_m(&(entry.data_mag.x), &(entry.data_mag.y), &(entry.data_mag.z));   // read data
+    spi_rd_status(&status);
+    spi_wr_status(0u, 1u);
+
+    stereo_imu_mem_lock();
+    if (0 < stereo_imu_mem_empty()) {
+        memcpy(stereo_imu_mem_writeAt(0u), &entry, sizeof(entry_t));
+        stereo_imu_mem_write(1u);
+
+    } else {
+        pr_err("Magnetometer set measurement could not be stored.");
+    }
+    stereo_imu_mem_unlock();
 
     return 0;
 }
@@ -355,21 +364,24 @@ int stereo_imu_mag_enable(void) {
         return -1;
     }
 
+    stereo_imu_mem_read(stereo_imu_mem_full()); // clear the buffer
+
+    enable_irq(mg_irqLine);
+
     if (0 != mag_set_reset()) {
         return -1;
     }
 
-    // TODO
-    pr_info("spi_wr_ic0(0u, 0u, 1u, 0u, 0u)=%d.\n", spi_wr_ic0(0u, 0u, 1u, 0u, 0u));   // irq on
-    pr_info("spi_wr_ic2(1u)=%d.\n", spi_wr_ic2(2u));                                   // measure continously
+    spi_wr_ic0(0u, 0u, 1u, 0u, 0u);   // irq on
+    spi_wr_ic2(2u);                                   // measure continously
 
     return 0;
 }
 
 void stereo_imu_mag_disable(void) {
-    disable_irq(irqLine);   // does it wait for the threaded irq part to finish too? assuming so - if not, then after clearing the entry
-                            // buffer we may get a sample there sometimes (not a big deal but need to fix that in such case - below is a
-                            // fix/method to check how in fact does it work)
+    disable_irq(mg_irqLine);   // does it wait for the threaded irq part to finish too? assuming so - if not, then after clearing the entry
+                                // buffer we may get a sample there sometimes (not a big deal but need to fix that in such case - below is a
+                                // fix/method to check how in fact does it work)
     while (0u != mg_irqInProgress) {
         pr_err(
             "Bottom handler indeed still does some job 'after' disable_irq() returned. Keep the functionality of mg_irqInProgress or "

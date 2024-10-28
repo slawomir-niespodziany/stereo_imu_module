@@ -22,8 +22,10 @@ static const struct modversion_info ____versions[]
 __used
 __attribute__((section("__versions"))) = {
 	{ 0x95f28b28, __VMLINUX_SYMBOL_STR(module_layout) },
+	{ 0x3ce4ca6f, __VMLINUX_SYMBOL_STR(disable_irq) },
 	{ 0x7dc0587e, __VMLINUX_SYMBOL_STR(cdev_del) },
 	{ 0xed3518ea, __VMLINUX_SYMBOL_STR(cdev_init) },
+	{ 0xf9a482f9, __VMLINUX_SYMBOL_STR(msleep) },
 	{ 0x1fdc7df2, __VMLINUX_SYMBOL_STR(_mcount) },
 	{ 0x3e394e03, __VMLINUX_SYMBOL_STR(bus_find_device_by_name) },
 	{ 0xf33847d3, __VMLINUX_SYMBOL_STR(_raw_spin_unlock) },
@@ -42,6 +44,7 @@ __attribute__((section("__versions"))) = {
 	{ 0xb35dea8f, __VMLINUX_SYMBOL_STR(__arch_copy_to_user) },
 	{ 0xa202a8e5, __VMLINUX_SYMBOL_STR(kmalloc_order_trace) },
 	{ 0x5cd885d5, __VMLINUX_SYMBOL_STR(_raw_spin_lock) },
+	{ 0xfcec0987, __VMLINUX_SYMBOL_STR(enable_irq) },
 	{ 0x37a0cba, __VMLINUX_SYMBOL_STR(kfree) },
 	{ 0xfa05263e, __VMLINUX_SYMBOL_STR(class_destroy) },
 	{ 0x28318305, __VMLINUX_SYMBOL_STR(snprintf) },
@@ -58,4 +61,4 @@ __attribute__((section(".modinfo"))) =
 "depends=";
 
 
-MODULE_INFO(srcversion, "1F6AF6169C1B45376AB05FF");
+MODULE_INFO(srcversion, "D217702F1D4042BACE30872");

@@ -41,8 +41,13 @@ static ssize_t _read(struct file *pFile, char __user *pBuffer, size_t size, loff
         result = 0;
         pEntry = stereo_imu_mem_readAt(0u);
         switch (pEntry->type) {
-            case ENTRY_TYPE_CALIB_MAG:
-                result = snprintf(&buffer[0], sizeof(buffer), "ts=%lu, type=CALIB_MAG, x=%d, y=%d, z=%d\n",   //
+            case ENTRY_TYPE_CALIB_MAG_SET:
+                result = snprintf(&buffer[0], sizeof(buffer), "ts=%lu, type=CALIB_MAG_SET, x=%d, y=%d, z=%d\n",   //
+                                  pEntry->timestamp, pEntry->data_mag.x, pEntry->data_mag.y, pEntry->data_mag.z);
+                break;
+
+            case ENTRY_TYPE_CALIB_MAG_RESET:
+                result = snprintf(&buffer[0], sizeof(buffer), "ts=%lu, type=CALIB_MAG_RESET, x=%d, y=%d, z=%d\n",   //
                                   pEntry->timestamp, pEntry->data_mag.x, pEntry->data_mag.y, pEntry->data_mag.z);
                 break;
 
