@@ -1,14 +1,15 @@
+#include <linux/delay.h>
 #include <linux/gpio/driver.h>
 #include <linux/interrupt.h>
 #include <linux/spi/spi.h>
 
 //
 #include "stereo_imu_mag.h"
+#include "stereo_imu_mem.h"
 
 /**
- * Magnetometer SPI interface.
+ * SPI interface.
  */
-
 static struct spi_device *mg_pSpiDevice = NULL;
 
 static int spi_init(void) {
@@ -57,7 +58,7 @@ static int spi_init(void) {
 
 static void spi_deinit(void) {}
 
-static int spi_rd_data_m(uint32_t *pX, uint32_t *pY, uint32_t *pZ) {
+static inline int spi_rd_data_m(uint32_t *pX, uint32_t *pY, uint32_t *pZ) {
     uint8_t buf[] = {0x80u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
     struct spi_transfer spiTransfer = {.tx_buf = &buf[0], .rx_buf = &buf[0], .len = (sizeof(buf) / sizeof(buf[0]))};
     int result;
@@ -78,7 +79,7 @@ static int spi_rd_data_m(uint32_t *pX, uint32_t *pY, uint32_t *pZ) {
     return result;
 }
 
-static int spi_rd_status(uint8_t *pStatus) {
+static inline int spi_rd_status(uint8_t *pStatus) {
     uint8_t buf[] = {0x88u, 0u};
     struct spi_transfer spiTransfer = {.tx_buf = &buf[0], .rx_buf = &buf[0], .len = (sizeof(buf) / sizeof(buf[0]))};
     int result = spi_sync_transfer(mg_pSpiDevice, &spiTransfer, 1);
@@ -90,31 +91,35 @@ static int spi_rd_status(uint8_t *pStatus) {
     return result;
 }
 
-static int spi_wr_status(uint8_t t, uint8_t m) {
+static inline int spi_wr_status(uint8_t t, uint8_t m) {
     uint8_t buf[] = {0x08u, ((0 != t) ? (0x02u) : (0x00u)) | ((0 != m) ? (0x01u) : (0x00u))};
     struct spi_transfer spiTransfer = {.tx_buf = &buf[0], .rx_buf = &buf[0], .len = (sizeof(buf) / sizeof(buf[0]))};
     return spi_sync_transfer(mg_pSpiDevice, &spiTransfer, 1);
 }
 
-static int spi_wr_ic0(uint8_t irq, uint8_t t, uint8_t m) {
-    uint8_t buf[] = {0x09u, ((0 != irq) ? (0x04u) : (0x00u)) | ((0 != t) ? (0x02u) : (0x00u)) | ((0 != m) ? (0x01u) : (0x00u))};
+static inline int spi_wr_ic0(uint8_t r, uint8_t s, uint8_t irq, uint8_t t, uint8_t m) {
+    uint8_t buf[] = {0x09u, ((0 != r) ? (0x10u) : (0x00u)) |         //
+                                ((0 != s) ? (0x08u) : (0x00u)) |     //
+                                ((0 != irq) ? (0x04u) : (0x00u)) |   //
+                                ((0 != t) ? (0x02u) : (0x00u)) |     //
+                                ((0 != m) ? (0x01u) : (0x00u))};
     struct spi_transfer spiTransfer = {.tx_buf = &buf[0], .rx_buf = &buf[0], .len = (sizeof(buf) / sizeof(buf[0]))};
     return spi_sync_transfer(mg_pSpiDevice, &spiTransfer, 1);
 }
 
-static int spi_wr_ic1(uint8_t rst) {
+static inline int spi_wr_ic1(uint8_t rst) {
     uint8_t buf[] = {0x0Au, (0 != rst) ? (0x80u) : (0x00u)};
     struct spi_transfer spiTransfer = {.tx_buf = &buf[0], .rx_buf = &buf[0], .len = (sizeof(buf) / sizeof(buf[0]))};
     return spi_sync_transfer(mg_pSpiDevice, &spiTransfer, 1);
 }
 
-static int spi_wr_ic2(uint8_t freq) {
+static inline int spi_wr_ic2(uint8_t freq) {
     uint8_t buf[] = {0x0Bu, ((0 != freq) ? (0x08u) : (0x00u)) | (0x07u & freq)};
     struct spi_transfer spiTransfer = {.tx_buf = &buf[0], .rx_buf = &buf[0], .len = (sizeof(buf) / sizeof(buf[0]))};
     return spi_sync_transfer(mg_pSpiDevice, &spiTransfer, 1);
 }
 
-static int spi_rd_id(uint8_t *pId) {
+static inline int spi_rd_id(uint8_t *pId) {
     uint8_t buf[] = {0xAFu, 0u};
     struct spi_transfer spiTransfer = {.tx_buf = &buf[0], .rx_buf = &buf[0], .len = (sizeof(buf) / sizeof(buf[0]))};
     int result = spi_sync_transfer(mg_pSpiDevice, &spiTransfer, 1);
@@ -127,16 +132,15 @@ static int spi_rd_id(uint8_t *pId) {
 }
 
 /**
- * Magnetometer interrupt.
+ * Interrupt.
  */
 static const uint8_t mg_irqPin = 194u;
 
 static struct gpio_chip *mg_pGpioChip = NULL;
 static unsigned int mg_irqLine;
 
-static unsigned long mg_initTimestamp;
 static unsigned long mg_irqTimestamp;
-static unsigned long mg_prevIrqTimestamp;
+static uint8_t mg_irqInProgress = 0u;
 
 static int gpiochip_match(struct gpio_chip *chip, void *data) {
     const char *pLabel = (const char *) data;
@@ -151,37 +155,39 @@ static int gpiochip_match(struct gpio_chip *chip, void *data) {
 }
 
 static irqreturn_t irq_handler_top(int irq, void *dev_id) {
-    mg_irqTimestamp = jiffies - mg_initTimestamp;
-    pr_info("mg_irqTimestamp=%lu\n", mg_irqTimestamp);
+    mg_irqInProgress = 1u;
+    mg_irqTimestamp = (1000ul * jiffies) / HZ;
     return IRQ_WAKE_THREAD;
 }
 
 static irqreturn_t irq_handler_bottom(int irq, void *dev_id) {
-    uint32_t x, y, z;
+    entry_t entry = {
+        .type = ENTRY_TYPE_DATA_MAG,
+        .timestamp = mg_irqTimestamp,
+    };
+    int result;
     uint8_t status;
 
-    pr_info("irqDiff=%lu\n", mg_irqTimestamp - mg_prevIrqTimestamp);
-    mg_prevIrqTimestamp = mg_irqTimestamp;
+    result = spi_rd_data_m(&(entry.data_mag.x), &(entry.data_mag.y), &(entry.data_mag.z));
+    // pr_info("spi_rd_data_m(&x, &y, &z)=%d, x=%5d, y=%5d, z=%5d.\n", result, entry.data_mag.x, entry.data_mag.y, entry.data_mag.z);
 
-    // if (0u != g_cont) {
-    //     if (0u == g_measuring) {
-    //         g_measuring = 1u;
-    //         pr_info("_wr_ic0(1u, 0u, 0u)=%d.\n", _wr_ic0(1u, 0u, 0u));   // irq on
-    //         pr_info("_wr_ic2(1u)=%d.\n", _wr_ic2(1u));                   // measure continously
-    //     }
-    // } else {
-    //     if (0u != g_measuring) {
-    //         g_measuring = 0u;
-    //         pr_info("_wr_ic2(1u)=%d.\n", _wr_ic2(0u));   // measure continously
-    //     }
-    // }
+    result = spi_rd_status(&status);
+    // pr_info("spi_rd_status(&status)=%d, status=0x%x, MD=%d.\n", result, status, (0 != (0x01u & status)));
 
-    // pr_info("spi_rd_status(&status)=%d, status=0x%x, MD=%d.\n", spi_rd_status(&status), status, (0 != (0x01u & status)));
-    pr_info("spi_rd_data_m(&x, &y, &z)=%d, x=%5d, y=%5d, z=%5d.\n", spi_rd_data_m(&x, &y, &z), x, y, z);
-    pr_info("spi_rd_status(&status)=%d, status=0x%x, MD=%d.\n", spi_rd_status(&status), status, (0 != (0x01u & status)));
-    pr_info("spi_wr_status(0u, 1u)=%d.\n", spi_wr_status(0u, 1u));
-    // pr_info("spi_rd_status(&status)=%d, status=0x%x, MD=%d.\n", spi_rd_status(&status), status, (0 != (0x01u & status)));
+    result = spi_wr_status(0u, 1u);
+    // pr_info("spi_wr_status(0u, 1u)=%d.\n", result);
 
+    stereo_imu_mem_lock();
+    if (0 < stereo_imu_mem_empty()) {
+        memcpy(stereo_imu_mem_writeAt(0u), &entry, sizeof(entry_t));
+        stereo_imu_mem_write(1u);
+
+    } else {
+        pr_err("Magnetometer measurement could not be stored.");
+    }
+    stereo_imu_mem_unlock();
+
+    mg_irqInProgress = 0u;
     return IRQ_HANDLED;
 }
 
@@ -233,9 +239,10 @@ static int irq_init(void) {
         return -1;
     }
 
+    disable_irq(irqLine);
+
     mg_pGpioChip = pGpioChip;
     mg_irqLine = irqLine;
-    mg_initTimestamp = jiffies;
 
     return 0;
 }
@@ -244,41 +251,156 @@ static void irq_deinit(void) {
     if (NULL != mg_pGpioChip) {
         free_irq(mg_irqLine, NULL);
         mg_pGpioChip->free(mg_pGpioChip, mg_irqPin);
+        mg_pGpioChip = NULL;
     }
 }
 
 /**
- * Magnetometer driver.
+ * Magnetometer.
  */
-static int mag_init(void) {
+static int mag_set_reset(void) {
     unsigned int n;
-    const unsigned int N = 128u;
-    uint8_t id = 0;
+    const unsigned int N = 64u;
+    uint8_t status;
+    entry_t entry;
 
-    pr_info("spi_wr_ic1(1u)=%d\n", spi_wr_ic1(1u));   // reset
+    spi_wr_ic0(0u, 1u, 0u, 0u, 0u);   // perform set
+    msleep(10u);
+
+    spi_wr_ic0(0u, 0u, 0u, 0u, 1u);   // measure
+
     for (n = 0; n < N; n++) {
         uint8_t status;
-        pr_info("spi_rd_status(&status)=%d, status=0x%x, OTP=%d\n", spi_rd_status(&status), status, (0 != (0x10 & status)));
+        spi_rd_status(&status);
 
-        if (0 != (0x10 & status)) {
+        if (0 != (0x01u & status)) {
             break;
         }
+
+        msleep(1u);
+    }
+    if (n == N) {
+        pr_err("Magnetometer measurement not done for set.");
+        return -1;
     }
 
-    pr_info("spi_rd_id(&id)=%d, id=0x%x\n", spi_rd_id(&id), id);   // read id
+    entry.type = ENTRY_TYPE_CALIB_MAG_SET;
+    entry.timestamp = (1000 * jiffies) / HZ;
 
-    // TODO
-    pr_info("spi_wr_ic0(1u, 0u, 0u)=%d.\n", spi_wr_ic0(1u, 0u, 0u));   // irq on
-    pr_info("spi_wr_ic2(1u)=%d.\n", spi_wr_ic2(1u));                   // measure continously
+    spi_rd_data_m(&(entry.data_mag.x), &(entry.data_mag.y), &(entry.data_mag.z));   // read data
+    spi_rd_status(&status);
+    spi_wr_status(0u, 1u);
+
+    stereo_imu_mem_lock();
+    if (0 < stereo_imu_mem_empty()) {
+        memcpy(stereo_imu_mem_writeAt(0u), &entry, sizeof(entry_t));
+        stereo_imu_mem_write(1u);
+
+    } else {
+        pr_err("Magnetometer set measurement could not be stored.");
+    }
+    stereo_imu_mem_unlock();
+
+    spi_wr_ic0(1u, 0u, 0u, 0u, 0u);   // perform reset
+    msleep(10u);
+
+    spi_wr_ic0(0u, 0u, 0u, 0u, 1u);   // measure
+
+    for (n = 0; n < N; n++) {
+        uint8_t status;
+        spi_rd_status(&status);
+
+        if (0 != (0x01u & status)) {
+            break;
+        }
+
+        msleep(1u);
+    }
+    if (n == N) {
+        pr_err("Magnetometer measurement not done for reset.");
+        return -1;
+    }
+
+    entry.type = ENTRY_TYPE_CALIB_MAG_RESET;
+    entry.timestamp = (1000 * jiffies) / HZ;
+
+    spi_rd_data_m(&(entry.data_mag.x), &(entry.data_mag.y), &(entry.data_mag.z));   // read data
+    spi_rd_status(&status);
+    spi_wr_status(0u, 1u);
+
+    stereo_imu_mem_lock();
+    if (0 < stereo_imu_mem_empty()) {
+        memcpy(stereo_imu_mem_writeAt(0u), &entry, sizeof(entry_t));
+        stereo_imu_mem_write(1u);
+
+    } else {
+        pr_err("Magnetometer reset measurement could not be stored.");
+    }
+    stereo_imu_mem_unlock();
 
     return 0;
 }
 
-static void mag_deinit(void) {
-    pr_info("spi_wr_ic2(1u)=%d.\n", spi_wr_ic2(0u));                   // measure stop
-    pr_info("spi_wr_ic0(1u, 0u, 0u)=%d.\n", spi_wr_ic0(0u, 0u, 0u));   // irq off
+int stereo_imu_mag_enable(void) {
+    unsigned int n;
+    const unsigned int N = 128u;
+    uint8_t id = 0;
+
+    spi_wr_ic1(1u);   // reset
+    msleep(20u);      // device starts in ~10ms
+
+    for (n = 0; n < N; n++) {
+        uint8_t status;
+        spi_rd_status(&status);
+
+        if (0 != (0x10 & status)) {
+            break;
+        }
+
+        msleep(1u);
+    }
+    if (n == N) {
+        pr_err("Magnetometer OTP not loaded correctly.");
+        return -1;
+    }
+
+    spi_rd_id(&id);
+    if (0x30 != id) {
+        pr_err("Magnetometer id=0x%x invalid. Shall be 0x30.", id);
+        return -1;
+    }
+
+    stereo_imu_mem_read(stereo_imu_mem_full());   // clear the buffer
+
+    enable_irq(mg_irqLine);
+
+    if (0 != mag_set_reset()) {
+        return -1;
+    }
+
+    spi_wr_ic0(0u, 0u, 1u, 0u, 0u);   // irq on
+    spi_wr_ic2(5u);                   // measure continously
+
+    return 0;
 }
 
+void stereo_imu_mag_disable(void) {
+    disable_irq(mg_irqLine);   // does it wait for the threaded irq part to finish too? assuming so - if not, then after clearing the entry
+                               // buffer we may get a sample there sometimes (not a big deal but need to fix that in such case - below is a
+                               // fix/method to check how in fact does it work)
+    while (0u != mg_irqInProgress) {
+        pr_err(
+            "Bottom handler indeed still does some job 'after' disable_irq() returned. Keep the functionality of mg_irqInProgress or "
+            "implement something else.\n");
+    }   // now the bottom handler has definitely finished handling the last interrupt
+
+    spi_wr_ic2(0u);                   // measure stop
+    spi_wr_ic0(0u, 0u, 0u, 0u, 0u);   // irq off
+}
+
+/**
+ * Module.
+ */
 int stereo_imu_mag_init(void) {
     if (0 != spi_init()) {
         return -1;
@@ -288,14 +410,7 @@ int stereo_imu_mag_init(void) {
         goto _l_spi_deinit;
     }
 
-    if (0 != mag_init()) {
-        goto _l_irq_deinit;
-    }
-
     return 0;
-
-_l_irq_deinit:
-    irq_deinit();   // revert irq_init() call
 
 _l_spi_deinit:
     spi_deinit();   // revert spi_init() call
@@ -304,7 +419,7 @@ _l_spi_deinit:
 }
 
 void stereo_imu_mag_deinit(void) {
+    stereo_imu_mag_disable();
     irq_deinit();
     spi_deinit();
-    mag_deinit();
 }
