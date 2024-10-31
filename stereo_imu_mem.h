@@ -33,6 +33,8 @@ typedef struct {
     };
 } entry_t;
 
+extern wait_queue_head_t g_stereoImuMem_waitQueue;
+
 int stereo_imu_mem_init(void);
 void stereo_imu_mem_deinit(void);
 

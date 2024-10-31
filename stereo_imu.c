@@ -8,6 +8,7 @@
 #include <linux/kdev_t.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/poll.h>
 #include <linux/uaccess.h>
 
 //
@@ -88,6 +89,11 @@ static int _release(struct inode *pInode, struct file *pFile) {
     return 0;
 }
 
+static unsigned int _poll(struct file *pFile, struct poll_table_struct *pPollTableStruct) {
+    poll_wait(pFile, &g_stereoImuMem_waitQueue, pPollTableStruct);
+    return (0u != stereo_imu_mem_full()) ? (POLLIN | POLLRDNORM) : (0u);
+}
+
 static dev_t mg_dev;
 static struct cdev mg_cdev;
 static struct file_operations mg_fileOperations = {
@@ -96,6 +102,7 @@ static struct file_operations mg_fileOperations = {
     .write = _write,
     .open = _open,
     .release = _release,
+    .poll = _poll,
 };
 static struct class *mg_pClass;
 

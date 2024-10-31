@@ -1,5 +1,7 @@
 #include "stereo_imu_mem.h"
 
+DECLARE_WAIT_QUEUE_HEAD(g_stereoImuMem_waitQueue);
+
 #define ENTRY_COUNT (1024u * 16u)
 
 static entry_t* mg_pEntry = NULL;
@@ -32,4 +34,7 @@ void stereo_imu_mem_read(unsigned int count) { mg_entryRdPtr = (mg_entryRdPtr + 
 
 unsigned int stereo_imu_mem_empty(void) { return (mg_entryRdPtr + (ENTRY_COUNT - 1) - mg_entryWrPtr) % ENTRY_COUNT; }
 entry_t* stereo_imu_mem_writeAt(unsigned int offset) { return mg_pEntry + ((mg_entryWrPtr + offset) % ENTRY_COUNT); }
-void stereo_imu_mem_write(unsigned int count) { mg_entryWrPtr = (mg_entryWrPtr + count) % ENTRY_COUNT; }
+void stereo_imu_mem_write(unsigned int count) {
+    mg_entryWrPtr = (mg_entryWrPtr + count) % ENTRY_COUNT;
+    wake_up(&g_stereoImuMem_waitQueue);
+}
